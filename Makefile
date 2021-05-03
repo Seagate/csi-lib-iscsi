@@ -16,3 +16,6 @@ install:
 test:
 	go test ./iscsi/
 
+coverage:
+	go test ./iscsi -coverprofile=coverage.out
+	go tool cover -html=coverage.out
