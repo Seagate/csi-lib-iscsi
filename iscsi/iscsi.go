@@ -98,7 +98,7 @@ func EnableDebugLogging(writer io.Writer) {
 
 // parseSession takes the raw stdout from the iscsiadm -m session command and encodes it into an iscsi session type
 func parseSessions(lines string) []iscsiSession {
-	entries := strings.Split(strings.TrimSpace(string(lines)), "\n")
+	entries := strings.Split(strings.TrimSpace(lines), "\n")
 	r := strings.NewReplacer("[", "",
 		"]", "")
 
@@ -165,7 +165,7 @@ func getCurrentSessions() ([]iscsiSession, error) {
 
 func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds uint, deviceTransport string) error {
 	if devicePath == nil || *devicePath == "" {
-		return fmt.Errorf("Unable to check unspecified devicePath")
+		return fmt.Errorf("unable to check unspecified devicePath")
 	}
 
 	for i := uint(0); i <= maxRetries; i++ {
@@ -218,16 +218,24 @@ func getMultipathDevice(devices []Device) (*Device, error) {
 
 	for _, device := range devices {
 		if len(device.Children) != 1 {
-			return nil, fmt.Errorf("Device is not mapped to exactly one multipath device: %v", device.Children)
+			multipathdNotRunning := ""
+			if len(device.Children) == 0 {
+				multipathdNotRunning = " (is multipathd running?)"
+			}
+			return nil, fmt.Errorf("device is not mapped to exactly one multipath device%s: %v", multipathdNotRunning, device.Children)
 		}
 		if multipathDevice != nil && device.Children[0].Name != multipathDevice.Name {
-			return nil, fmt.Errorf("Devices don't share a common multipath device: %v", devices)
+			return nil, fmt.Errorf("devices don't share a common multipath device: %v", devices)
 		}
 		multipathDevice = &device.Children[0]
 	}
 
+	if multipathDevice == nil {
+		return nil, fmt.Errorf("multipath device not found")
+	}
+
 	if multipathDevice.Type != "mpath" {
-		return nil, fmt.Errorf("Device is not of mpath type: %v", multipathDevice)
+		return nil, fmt.Errorf("device is not of mpath type: %v", multipathDevice)
 	}
 
 	return multipathDevice, nil
@@ -269,7 +277,7 @@ func (c *Connector) Connect() (string, error) {
 	// GetIscsiDevices returns all devices if no paths are given
 	if len(devicePaths) < 1 {
 		c.Devices = []Device{}
-	} else if c.Devices, err = GetIscsiDevices(devicePaths); err != nil {
+	} else if c.Devices, err = GetIscsiDevices(devicePaths, true); err != nil {
 		return "", err
 	}
 
@@ -289,7 +297,7 @@ func (c *Connector) Connect() (string, error) {
 	}
 
 	if c.IsMultipathEnabled() {
-		if err := c.isMultipathConsistent(); err != nil {
+		if err := c.IsMultipathConsistent(); err != nil {
 			return "", fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 	}
@@ -397,7 +405,7 @@ func (c *Connector) DisconnectVolume() error {
 	// Note: make sure the volume is already unmounted before calling this method.
 
 	if c.IsMultipathEnabled() {
-		if err := c.isMultipathConsistent(); err != nil {
+		if err := c.IsMultipathConsistent(); err != nil {
 			return fmt.Errorf("multipath is inconsistent: %v", err)
 		}
 
@@ -422,7 +430,7 @@ func (c *Connector) DisconnectVolume() error {
 }
 
 func (c *Connector) getMountTargetDevice() (*Device, error) {
-	if c.IsMultipathEnabled() {
+	if len(c.Devices) > 1 {
 		multipathDevice, err := getMultipathDevice(c.Devices)
 		if err != nil {
 			debug.Printf("mount target is not a multipath device: %v", err)
@@ -441,15 +449,15 @@ func (c *Connector) getMountTargetDevice() (*Device, error) {
 
 // IsMultipathEnabled check if multipath is enabled on devices handled by this connector
 func (c *Connector) IsMultipathEnabled() bool {
-	return len(c.Devices) > 1
+	return c.MountTargetDevice.Type == "mpath"
 }
 
 // GetScsiDevices get SCSI devices from device paths
 // It will returns all SCSI devices if no paths are given
-func GetScsiDevices(devicePaths []string) ([]Device, error) {
+func GetScsiDevices(devicePaths []string, strict bool) ([]Device, error) {
 	debug.Printf("Getting info about SCSI devices %s.\n", devicePaths)
 
-	deviceInfo, err := lsblk(devicePaths)
+	deviceInfo, err := lsblk(devicePaths, strict)
 	if err != nil {
 		debug.Printf("An error occured while looking info about SCSI devices: %v", err)
 		return nil, err
@@ -460,8 +468,8 @@ func GetScsiDevices(devicePaths []string) ([]Device, error) {
 
 // GetIscsiDevices get iSCSI devices from device paths
 // It will returns all iSCSI devices if no paths are given
-func GetIscsiDevices(devicePaths []string) (devices []Device, err error) {
-	scsiDevices, err := GetScsiDevices(devicePaths)
+func GetIscsiDevices(devicePaths []string, strict bool) (devices []Device, err error) {
+	scsiDevices, err := GetScsiDevices(devicePaths, strict)
 	if err != nil {
 		return
 	}
@@ -476,18 +484,26 @@ func GetIscsiDevices(devicePaths []string) (devices []Device, err error) {
 	return
 }
 
-func lsblk(devicePaths []string) (*deviceInfo, error) {
+func lsblk(devicePaths []string, strict bool) (*deviceInfo, error) {
 	flags := []string{"-J", "-o", "NAME,HCTL,TYPE,TRAN,SIZE"}
 	command := execCommand("lsblk", append(flags, devicePaths...)...)
 	debug.Println(command.String())
-	out, err := command.CombinedOutput()
+	out, err := command.Output()
 	if err != nil {
-		return nil, errors.New(string(out))
+		if ee, ok := err.(*exec.ExitError); ok {
+			err = fmt.Errorf("%s, (%w)", strings.Trim(string(ee.Stderr), "\n"), ee)
+			if strict || ee.ExitCode() != 64 { // ignore the error if some devices have been found when not strict
+				return nil, err
+			}
+			debug.Printf("Could find only some devices: %v", err)
+		} else {
+			return nil, err
+		}
 	}
 
 	var deviceInfo deviceInfo
-	if err = json.Unmarshal(out, &deviceInfo); err != nil {
-		return nil, err
+	if jsonErr := json.Unmarshal(out, &deviceInfo); jsonErr != nil {
+		return nil, jsonErr
 	}
 
 	return &deviceInfo, nil
@@ -551,7 +567,7 @@ func RemoveScsiDevices(devices ...Device) error {
 	if len(errs) > 0 {
 		return errs[0]
 	}
-	debug.Println("Finshed removing SCSI devices.")
+	debug.Println("Finished removing SCSI devices.")
 	return nil
 }
 
@@ -587,20 +603,20 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 		devicePaths = append(devicePaths, device.GetPath())
 	}
 
-	if devices, err := GetScsiDevices([]string{c.MountTargetDevice.GetPath()}); err != nil {
+	if devices, err := GetScsiDevices([]string{c.MountTargetDevice.GetPath()}, false); err != nil {
 		return nil, err
 	} else {
 		c.MountTargetDevice = &devices[0]
 	}
 
-	if c.Devices, err = GetScsiDevices(devicePaths); err != nil {
+	if c.Devices, err = GetScsiDevices(devicePaths, false); err != nil {
 		return nil, err
 	}
 
 	return &c, nil
 }
 
-func (c *Connector) isMultipathConsistent() error {
+func (c *Connector) IsMultipathConsistent() error {
 	devices := append([]Device{*c.MountTargetDevice}, c.Devices...)
 
 	referenceLUN := struct {
@@ -635,7 +651,7 @@ func (c *Connector) isMultipathConsistent() error {
 
 		wwid, err := device.WWID()
 		if err != nil {
-			return fmt.Errorf("could not find WWID for device %s", device.Name)
+			return fmt.Errorf("could not find WWID for device %s: %v", device.Name, err)
 		}
 		if wwid != referenceDevice.Name {
 			return fmt.Errorf("devices WWIDs differ: %s (wwid:%s) != %s (wwid:%s)", device.Name, wwid, referenceDevice.Name, referenceDevice.Name)
@@ -662,12 +678,10 @@ func (d *Device) GetPath() string {
 
 // WWID returns the WWID of a device
 func (d *Device) WWID() (string, error) {
-	command := execCommand("/lib/udev/scsi_id", "-g", "-u", d.GetPath())
-	debug.Println(command.String())
-
-	out, err := command.CombinedOutput()
+	timeout := 1 * time.Second
+	out, err := execWithTimeout("scsi_id", []string{"-g", "-u", d.GetPath()}, timeout)
 	if err != nil {
-		return "", errors.New("WWID not found")
+		return "", err
 	}
 
 	return string(out[:len(out)-1]), nil

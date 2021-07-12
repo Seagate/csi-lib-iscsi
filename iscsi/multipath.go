@@ -61,7 +61,7 @@ func FlushMultipathDevice(device *Device) error {
 
 	if err != nil {
 		if _, e := osStat(devicePath); os.IsNotExist(e) {
-			debug.Printf("Multipath device %v was deleted.\n", devicePath)
+			debug.Printf("Multipath device %v has been removed.\n", devicePath)
 		} else {
 			if strings.Contains(err.Error(), "map in use") {
 				err = fmt.Errorf("device is probably still in use somewhere else: %v", err)

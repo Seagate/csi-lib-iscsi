@@ -3,6 +3,7 @@ package iscsi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -117,12 +118,12 @@ func makeFakeExecCommandContext(exitStatus int, stdout string) func(context.Cont
 	}
 }
 
-func makeFakeExecWithTimeout(testCmdTimeout bool, testExecWithTimeoutError error) func(string, []string, time.Duration) ([]byte, error) {
+func makeFakeExecWithTimeout(withTimeout bool, output []byte, err error) func(string, []string, time.Duration) ([]byte, error) {
 	return func(command string, args []string, timeout time.Duration) ([]byte, error) {
-		if testCmdTimeout {
+		if withTimeout {
 			return nil, context.DeadlineExceeded
 		}
-		return []byte(""), testExecWithTimeoutError
+		return output, err
 	}
 }
 
@@ -351,7 +352,13 @@ func Test_DisconnectMultipathVolume(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer gostub.Stub(&execWithTimeout, makeFakeExecWithTimeout(tt.timeout, nil)).Reset()
+			defer gostub.Stub(&execWithTimeout, func(cmd string, args []string, timeout time.Duration) ([]byte, error) {
+				mockedOutput := []byte("")
+				if cmd == "scsi_id" {
+					mockedOutput = []byte(wwid + "\n")
+				}
+				return makeFakeExecWithTimeout(tt.timeout, mockedOutput, nil)(cmd, args, timeout)
+			}).Reset()
 			c := Connector{
 				Devices:           []Device{{Hctl: "0:0:0:0"}, {Hctl: "1:0:0:0"}},
 				MountTargetDevice: &Device{Name: wwid, Type: "mpath"},
@@ -379,10 +386,7 @@ func Test_DisconnectMultipathVolume(t *testing.T) {
 			}
 
 			if tt.timeout {
-				if err != context.DeadlineExceeded {
-					t.Errorf("DisconnectVolume() error = %v, wantErr %v", err, context.DeadlineExceeded)
-					return
-				}
+				assert.New(t).Contains(err.Error(), "context deadline exceeded")
 			}
 
 			if tt.withDeviceFile && !tt.wantErr {
@@ -574,6 +578,71 @@ func Test_getMultipathDevice(t *testing.T) {
 	}
 }
 
+func Test_lsblk(t *testing.T) {
+	sda := Device{Name: "sda", Children: []Device{{}}}
+
+	sdaOutput, err := json.Marshal(deviceInfo{BlockDevices: []Device{sda}})
+	assert.New(t).Nil(err, "could not setup test")
+
+	tests := map[string]struct {
+		devicePaths      []string
+		strict           bool
+		mockedStdout     string
+		mockedDevices    []Device
+		mockedExitStatus int
+		wantErr          bool
+	}{
+		"Basic": {
+			devicePaths:   []string{"/dev/sda"},
+			mockedDevices: []Device{sda},
+			mockedStdout:  string(sdaOutput),
+		},
+		"NotABlockDevice": {
+			devicePaths:      []string{"/dev/sdzz"},
+			mockedStdout:     "lsblk: sdzz: not a block device",
+			mockedExitStatus: 32,
+			wantErr:          true,
+		},
+		"InvalidJson": {
+			mockedStdout:     "{",
+			mockedExitStatus: 0,
+			wantErr:          true,
+		},
+		"StrictWithMissingDevices": {
+			devicePaths:      []string{"/dev/sda", "/dev/sdb"},
+			strict:           true,
+			mockedDevices:    []Device{sda},
+			mockedStdout:     string(sdaOutput),
+			mockedExitStatus: 64,
+			wantErr:          true,
+		},
+		"NotStrictWithMissingDevices": {
+			devicePaths:      []string{"/dev/sda", "/dev/sdb"},
+			mockedDevices:    []Device{sda},
+			mockedStdout:     string(sdaOutput),
+			mockedExitStatus: 64,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+
+			defer gostub.Stub(&execCommand, makeFakeExecCommand(tt.mockedExitStatus, tt.mockedStdout)).Reset()
+			deviceInfo, err := lsblk(tt.devicePaths, tt.strict)
+
+			if tt.wantErr {
+				assert.Nil(deviceInfo)
+				assert.NotNil(err)
+			} else {
+				assert.NotNil(deviceInfo)
+				assert.Equal(tt.mockedDevices, deviceInfo.BlockDevices)
+				assert.Nil(err)
+			}
+		})
+	}
+}
+
 func TestConnectorPersistance(t *testing.T) {
 	assert := assert.New(t)
 
@@ -606,7 +675,7 @@ func TestConnectorPersistance(t *testing.T) {
 		SessionSecrets:    secret,
 		Interface:         "fake interface",
 		MountTargetDevice: &device,
-		Devices:           []Device{device, childDevice},
+		Devices:           []Device{childDevice},
 		RetryCount:        24,
 		CheckInterval:     13,
 		DoDiscovery:       true,
@@ -625,6 +694,18 @@ func TestConnectorPersistance(t *testing.T) {
 		out, err := json.Marshal(deviceInfo{BlockDevices: blockDevices})
 		assert.Nil(err, "could not setup test")
 		return makeFakeExecCommand(0, string(out))(name, arg...)
+	}).Reset()
+
+	defer gostub.Stub(&execCommand, func(cmd string, args ...string) *exec.Cmd {
+		mockedDevice := device
+		if args[3] == "/dev/child name" {
+			mockedDevice = childDevice
+		}
+
+		mockedOutput, err := json.Marshal(deviceInfo{BlockDevices: []Device{mockedDevice}})
+		assert.Nil(err, "could not setup test")
+
+		return makeFakeExecCommand(0, string(mockedOutput))(cmd, args...)
 	}).Reset()
 
 	c.Persist("/tmp/connector.json")
@@ -646,7 +727,7 @@ func TestConnectorPersistance(t *testing.T) {
 	assert.IsType(&json.SyntaxError{}, err)
 }
 
-func Test_isMultipathConsistent(t *testing.T) {
+func Test_IsMultipathConsistent(t *testing.T) {
 	mpath1 := Device{Name: "3600c0ff0000000000000000000000000", Type: "mpath", Size: "10G", Hctl: "0:0:0:1"}
 	mpath2 := Device{Name: "3600c0ff0000000000000000000000042", Type: "mpath", Size: "5G", Hctl: "0:0:0:2"}
 	sda := Device{Name: "sda", Size: "10G", Hctl: "1:0:0:1"}
@@ -736,17 +817,16 @@ func Test_isMultipathConsistent(t *testing.T) {
 			assert := assert.New(t)
 			c := tt.connector
 
-			defer gostub.Stub(&execCommand, makeFakeExecCommand(0, "3600c0ff0000000000000000000000000")).Reset()
-			defer gostub.Stub(&execCommand, func(name string, arg ...string) *exec.Cmd {
-				devicePath := arg[len(arg)-1]
+			defer gostub.Stub(&execWithTimeout, func(_ string, args []string, _ time.Duration) ([]byte, error) {
+				devicePath := args[len(args)-1]
 				wwid, ok := devicesWWIDs[devicePath]
 				if !ok {
-					return makeFakeExecCommand(1, "")(name, arg...)
+					return []byte(""), errors.New("")
 				}
-				return makeFakeExecCommand(0, wwid)(name, arg...)
+				return []byte(wwid + "\n"), nil
 			}).Reset()
 
-			err := c.isMultipathConsistent()
+			err := c.IsMultipathConsistent()
 
 			if tt.wantErr {
 				assert.Error(err)
