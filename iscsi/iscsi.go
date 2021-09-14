@@ -55,11 +55,11 @@ type Connector struct {
 	// DevicePath is dm-x for a multipath device, and sdx for a normal device.
 	DevicePath string `json:"device_path"`
 
-	RetryCount      int32 `json:"retry_count"`
-	CheckInterval   int32 `json:"check_interval"`
-	DoDiscovery     bool  `json:"do_discovery"`
-	DoCHAPDiscovery bool  `json:"do_chap_discovery"`
-	TargetIqn       string `json:"target_iqn"`
+	RetryCount      int32    `json:"retry_count"`
+	CheckInterval   int32    `json:"check_interval"`
+	DoDiscovery     bool     `json:"do_discovery"`
+	DoCHAPDiscovery bool     `json:"do_chap_discovery"`
+	TargetIqn       string   `json:"target_iqn"`
 	TargetPortals   []string `json:"target_portals"`
 }
 
@@ -147,8 +147,8 @@ func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds int, dev
 }
 
 func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
-	if devicePath == nil {
-		return false, fmt.Errorf("unable to check unspecified devicePath")
+	if devicePath == nil || *devicePath == "" {
+		return false, fmt.Errorf("unable to check nil or unspecified devicePath")
 	}
 
 	var err error
@@ -156,6 +156,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 		err = nil
 		if deviceTransport == "tcp" {
 			_, err = osStat(*devicePath)
+			debug.Printf("os stat device: exist %v device %v", !os.IsNotExist(err), *devicePath)
 			if err != nil && !os.IsNotExist(err) {
 				debug.Printf("Error attempting to stat device: %s", err.Error())
 				return false, err
@@ -164,6 +165,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 			}
 
 		} else {
+			debug.Printf("filepathGlob: %s", *devicePath)
 			fpath, _ := filepathGlob(*devicePath)
 			if fpath == nil {
 				err = os.ErrNotExist
@@ -171,6 +173,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 				// There might be a case that fpath contains multiple device paths if
 				// multiple PCI devices connect to same iscsi target. We handle this
 				// case at subsequent logic. Pick up only first path here.
+				debug.Printf("set - devicePath %s", fpath[0])
 				*devicePath = fpath[0]
 			}
 		}
@@ -210,6 +213,7 @@ func getMultipathDisk(path string) (string, error) {
 	}
 	for _, dmPath := range dmPaths {
 		sdevices, err := filepath.Glob(filepath.Join(dmPath, "slaves", "*"))
+		debug.Printf("dmPath=%v, sdevices=%v", dmPath, sdevices)
 		if err != nil {
 			debug.Printf("Glob error: %s", err)
 		}
@@ -230,7 +234,7 @@ func getMultipathDisk(path string) (string, error) {
 }
 
 // Connect attempts to connect a volume to this node using the provided Connector info
-func Connect(c Connector) (string, error) {
+func Connect(c *Connector) (string, error) {
 	var lastErr error
 	if c.RetryCount == 0 {
 		c.RetryCount = 10
@@ -279,7 +283,10 @@ func Connect(c Connector) (string, error) {
 
 		exists, _ := sessionExists(p, target.Iqn)
 		if exists {
-			if exists, err := waitForPathToExist(&devicePath, 1, 1, iscsiTransport); exists {
+			debug.Printf("Session already exists, checking if device path %q exists", devicePath)
+			exists, err := waitForPathToExist(&devicePath, int(c.RetryCount), int(c.CheckInterval), iscsiTransport)
+			debug.Printf("waitForPathToExist: exists=%v err=%v", exists, err)
+			if exists {
 				debug.Printf("Appending device path: %s", devicePath)
 				devicePaths = append(devicePaths, devicePath)
 				continue
@@ -334,15 +341,19 @@ func Connect(c Connector) (string, error) {
 	for i, path := range devicePaths {
 		if path != "" {
 			if mappedDevicePath, err := getMultipathDisk(path); mappedDevicePath != "" {
+				debug.Printf("update devicePaths[%d] before=%v, after=%v", i, devicePaths[i], mappedDevicePath)
 				devicePaths[i] = mappedDevicePath
+				c.Multipath = true
 				if err != nil {
 					return "", err
 				}
 			}
 		}
 	}
-	debug.Printf("After connect we're returning devicePaths: %s", devicePaths)
+	debug.Printf("After connect we're returning devicePaths: %v", devicePaths)
 	if len(devicePaths) > 0 {
+		c.DevicePath = devicePaths[0]
+		debug.Printf("set -- devicePath %s", c.DevicePath)
 		return devicePaths[0], err
 
 	}
@@ -373,7 +384,7 @@ func DisconnectVolume(c Connector) error {
 
 	debug.Printf("Disconnecting volume in path %s.\n", c.DevicePath)
 	if c.Multipath {
-		debug.Printf("Removing multipath device.\n")
+		debug.Printf("Removing multipath device %s\n", c.DevicePath)
 		devices, err := GetSysDevicesFromMultipathDevice(c.DevicePath)
 		if err != nil {
 			return err
@@ -453,15 +464,18 @@ func PersistConnector(c *Connector, filePath string) error {
 // GetConnectorFromFile attempts to create a Connector using the specified json file (ie /var/lib/pfile/myConnector.json)
 func GetConnectorFromFile(filePath string) (*Connector, error) {
 	f, err := ioutil.ReadFile(filePath)
+	debug.Printf("GetConnectorFromFile (%s), err=%v\n", filePath, err)
 	if err != nil {
 		return &Connector{}, err
-
 	}
+
 	data := Connector{}
 	err = json.Unmarshal(f, &data)
 	if err != nil {
 		return &Connector{}, err
 	}
+
+	debug.Printf("data: %+v\n", data)
 
 	return &data, nil
 

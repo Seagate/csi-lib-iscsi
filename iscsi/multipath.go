@@ -47,9 +47,10 @@ func ExecWithTimeout(command string, args []string, timeout time.Duration) ([]by
 // GetSysDevicesFromMultipathDevice gets all slaves for multipath device dm-x
 // in /sys/block/dm-x/slaves/
 func GetSysDevicesFromMultipathDevice(device string) ([]string, error) {
-	debug.Printf("Getting all slaves for multipath device %s.\n", device)
-	deviceSlavePath := filepath.Join(sysBlockPath, device, "slaves")
+	debug.Printf("Getting all slaves for multipath device %q\n", device)
+	deviceSlavePath := filepath.Join(sysBlockPath, filepath.Base(device), "slaves")
 	slaves, err := ioutil.ReadDir(deviceSlavePath)
+	debug.Printf("Read device slaves path: %q, slaves=%v, err=%v\n", deviceSlavePath, slaves, err)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -62,28 +63,28 @@ func GetSysDevicesFromMultipathDevice(device string) ([]string, error) {
 	for _, slave := range slaves {
 		s = append(s, slave.Name())
 	}
-	debug.Printf("Found slaves: %v.\n", s)
+	debug.Printf("Found slaves: %v\n", s)
 	return s, nil
 }
 
 // FlushMultipathDevice flushes a multipath device dm-x with command multipath -f /dev/dm-x
 func FlushMultipathDevice(device string) error {
-	debug.Printf("Flushing multipath device '%v'.\n", device)
+	debug.Printf("Flushing multipath device %q\n", device)
 
-	fullDevice := filepath.Join(devPath, device)
+	fullDevice := device
 	timeout := 5 * time.Second
 	_, err := execWithTimeout("multipath", []string{"-f", fullDevice}, timeout)
 
 	if err != nil {
 		if _, e := os.Stat(fullDevice); os.IsNotExist(e) {
-			debug.Printf("Multipath device %v was deleted.\n", device)
+			debug.Printf("Multipath device %q was deleted\n", device)
 		} else {
 			debug.Printf("Command 'multipath -f %v' did not succeed to delete the device: %v\n", fullDevice, err)
 			return err
 		}
 	}
 
-	debug.Printf("Finshed flushing multipath device %v.\n", device)
+	debug.Printf("Finshed flushing multipath device %q\n", device)
 	return nil
 }
 
