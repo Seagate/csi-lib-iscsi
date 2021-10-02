@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kubernetes-csi/csi-lib-iscsi/iscsi"
+	"github.com/Seagate/csi-lib-iscsi/iscsi"
 )
 
 var (
