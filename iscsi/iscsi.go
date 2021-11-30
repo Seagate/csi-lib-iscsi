@@ -105,6 +105,7 @@ func parseSessions(lines string) []iscsiSession {
 }
 
 func sessionExists(tgtPortal, tgtIQN string) (bool, error) {
+	debug.Printf("Begin sessionExists (%s/%s)...\n", tgtIQN, tgtPortal)
 	sessions, err := getCurrentSessions()
 	if err != nil {
 		return false, err
@@ -147,6 +148,7 @@ func waitForPathToExist(devicePath *string, maxRetries, intervalSeconds int, dev
 }
 
 func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int, deviceTransport string, osStat statFunc, filepathGlob globFunc) (bool, error) {
+	debug.Printf("waitForPathToExistImpl (%v)", *devicePath)
 	if devicePath == nil || *devicePath == "" {
 		return false, fmt.Errorf("unable to check nil or unspecified devicePath")
 	}
@@ -197,6 +199,8 @@ func getMultipathDisk(path string) (string, error) {
 		return "", err
 	}
 	sdevice := filepath.Base(devicePath)
+	debug.Printf("-- devicePath=%s, sdevice=%s", devicePath, sdevice)
+
 	// If destination directory is already identified as a multipath device,
 	// just return its path
 	if strings.HasPrefix(sdevice, "dm-") {
@@ -207,13 +211,14 @@ func getMultipathDisk(path string) (string, error) {
 	// check to see if any have an entry under /sys/block/dm-*/slaves matching
 	// the device the symlink was pointing at
 	dmPaths, err := filepath.Glob("/sys/block/dm-*")
+	debug.Printf("-- dmPaths=%v", dmPaths)
 	if err != nil {
 		debug.Printf("Glob error: %s", err)
 		return "", err
 	}
 	for _, dmPath := range dmPaths {
 		sdevices, err := filepath.Glob(filepath.Join(dmPath, "slaves", "*"))
-		debug.Printf("dmPath=%v, sdevices=%v", dmPath, sdevices)
+		debug.Printf("dmPath=%v/slaves/*, sdevices=%v", dmPath, sdevices)
 		if err != nil {
 			debug.Printf("Glob error: %s", err)
 		}
@@ -224,7 +229,7 @@ func getMultipathDisk(path string) (string, error) {
 				// We've found a matching entry, return the path for the
 				// dm-* device it was found under
 				p := filepath.Join("/dev", filepath.Base(dmPath))
-				debug.Printf("Found matching multipath device: %s under dm-* device path %s", sdevice, dmPath)
+				debug.Printf("Found matching multipath device (%s) under dm-* device path (%s), (%v)", sdevice, dmPath, p)
 				return p, nil
 			}
 		}
@@ -236,6 +241,7 @@ func getMultipathDisk(path string) (string, error) {
 // Connect attempts to connect a volume to this node using the provided Connector info
 func Connect(c *Connector) (string, error) {
 	var lastErr error
+	debug.Printf("Begin iSCSI Connect (dDoDiscovery=%v)...\n", c.DoDiscovery)
 	if c.RetryCount == 0 {
 		c.RetryCount = 10
 	}
