@@ -71,15 +71,19 @@ func GetSysDevicesFromMultipathDevice(device string) ([]string, error) {
 func FlushMultipathDevice(device string) error {
 	debug.Printf("Flushing multipath device %q\n", device)
 
-	fullDevice := device
+	err := RemoveAndClear(device)
+	if err != nil {
+		debug.Printf("device-mapper remove and clear device %q error=%v\n", device, err)
+	}
+
 	timeout := 5 * time.Second
-	_, err := execWithTimeout("multipath", []string{"-f", fullDevice}, timeout)
+	_, err = execWithTimeout("multipath", []string{"-f", device}, timeout)
 
 	if err != nil {
-		if _, e := os.Stat(fullDevice); os.IsNotExist(e) {
+		if _, e := os.Stat(device); os.IsNotExist(e) {
 			debug.Printf("Multipath device %q was deleted\n", device)
 		} else {
-			debug.Printf("Command 'multipath -f %v' did not succeed to delete the device: %v\n", fullDevice, err)
+			debug.Printf("Command 'multipath -f %v' did not succeed to delete the device: %v\n", device, err)
 			return err
 		}
 	}
@@ -94,6 +98,27 @@ func ResizeMultipathDevice(device string) error {
 
 	if output, err := execCommand("multipathd", "resize", "map", device).CombinedOutput(); err != nil {
 		return fmt.Errorf("could not resize multipath device: %s (%v)", output, err)
+	}
+
+	return nil
+}
+
+// RemoveAndClear calls 'dmsetup' to remove and clear a device entry
+func RemoveAndClear(device string) error {
+	debug.Printf("Remove and clear multipath device (%s)\n", device)
+
+	// Remove device-mapper logical device
+	if output, err := execCommand("dmsetup", "remove", "-f", device).CombinedOutput(); err != nil {
+		return fmt.Errorf("device-mapper could not remove device: %s (%v)", output, err)
+	}
+
+	// Clear out device-mapper logical device if it still exists
+	if _, e := os.Stat(device); os.IsNotExist(e) {
+		debug.Printf("device-mapper logical device %q was removed\n", device)
+	} else {
+		if output, err := execCommand("dmsetup", "clear", device).CombinedOutput(); err != nil {
+			return fmt.Errorf("device-mapper could not clear device: %s (%v)", output, err)
+		}
 	}
 
 	return nil

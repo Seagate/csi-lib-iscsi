@@ -83,14 +83,14 @@ func ListInterfaces() ([]string, error) {
 // ShowInterface retrieves the details for the specified iscsi interface
 // caller should inspect r.Err and use r.StdOut for interface details
 func ShowInterface(iface string) (string, error) {
-	debug.Println("Begin ShowInterface...")
+	debug.Printf("Begin ShowInterface (%s)...\n", iface)
 	out, err := iscsiCmd("-m", "iface", "-o", "show", "-I", iface)
 	return out, err
 }
 
 // CreateDBEntry sets up a node entry for the specified tgt in the nodes iscsi nodes db
 func CreateDBEntry(tgtIQN, portal, iFace string, discoverySecrets, sessionSecrets Secrets) error {
-	debug.Println("Begin CreateDBEntry...")
+	debug.Printf("Begin CreateDBEntry (%s)...\n", portal)
 	baseArgs := []string{"-m", "node", "-T", tgtIQN, "-p", portal}
 	_, err := iscsiCmd(append(baseArgs, []string{"-I", iFace, "-o", "new"}...)...)
 	if err != nil {
@@ -197,7 +197,7 @@ func Logout(tgtIQN string, portals []string) error {
 	debug.Println("Begin Logout...")
 	baseArgs := []string{"-m", "node", "-T", tgtIQN}
 	for _, p := range portals {
-		debug.Printf("attempting logout for portal: %s", p)
+		debug.Printf("attempting logout (%s) for portal: %s", tgtIQN, p)
 		args := append(baseArgs, []string{"-p", p, "-u"}...)
 		iscsiCmd(args...)
 	}
