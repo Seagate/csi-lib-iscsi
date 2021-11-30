@@ -210,11 +210,20 @@ func getMultipathDisk(path string) (string, error) {
 	// Fallback to iterating through all the entries under /sys/block/dm-* and
 	// check to see if any have an entry under /sys/block/dm-*/slaves matching
 	// the device the symlink was pointing at
+	attempts := 1
 	dmPaths, err := filepath.Glob("/sys/block/dm-*")
-	debug.Printf("-- dmPaths=%v", dmPaths)
-	if err != nil {
-		debug.Printf("Glob error: %s", err)
-		return "", err
+	for attempts < 4 {
+		debug.Printf("[%d] dmPaths=%v", attempts, dmPaths)
+		if err != nil {
+			debug.Printf("Glob error: %s", err)
+			return "", err
+		}
+		if len(dmPaths) > 0 {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		attempts++
+		dmPaths, err = filepath.Glob("/sys/block/dm-*")
 	}
 	for _, dmPath := range dmPaths {
 		sdevices, err := filepath.Glob(filepath.Join(dmPath, "slaves", "*"))
