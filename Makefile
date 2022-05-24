@@ -1,4 +1,4 @@
-.PHONY: all build clean install coverage test
+.PHONY: all build clean install test coverage
 
 all: clean build install
 

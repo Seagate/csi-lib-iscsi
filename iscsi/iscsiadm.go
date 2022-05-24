@@ -1,9 +1,9 @@
 package iscsi
 
 import (
-	"bytes"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Secrets provides optional iscsi security credentials (CHAP settings)
@@ -20,47 +20,13 @@ type Secrets struct {
 	PasswordIn string `json:"passwordIn,omitempty"`
 }
 
-// CmdError is a custom error to provide details including the command, stderr output and exit code.
-// iscsiadm in some cases requires all of this info to determine success or failure
-type CmdError struct {
-	CMD      string
-	StdErr   string
-	ExitCode int
-}
-
-func (e *CmdError) Error() string {
-	// we don't output the command in the error string to avoid leaking any security info
-	// the command is still available in the error structure if the caller wants it though
-	return fmt.Sprintf("iscsiadm returned an error: %s, exit-code: %d", e.StdErr, e.ExitCode)
-}
-
 func iscsiCmd(args ...string) (string, error) {
-	cmd := execCommand("iscsiadm", args...)
+	stdout, err := execWithTimeout("iscsiadm", args, time.Second*3)
+
 	debug.Printf("Run iscsiadm command: %s", strings.Join(append([]string{"iscsiadm"}, args...), " "))
-	var stdout bytes.Buffer
-	var iscsiadmError error
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stdout
-	defer stdout.Reset()
+	iscsiadmDebug(string(stdout), err)
 
-	// we're using Start and Wait because we want to grab exit codes
-	err := cmd.Start()
-	if err != nil {
-		// This is usually a cmd not found so we'll set our own error here
-		formattedOutput := strings.Replace(string(stdout.Bytes()), "\n", "", -1)
-		iscsiadmError = fmt.Errorf("iscsiadm error: %s (%s)", formattedOutput, err.Error())
-
-	} else {
-		err = cmd.Wait()
-		if err != nil {
-			formattedOutput := strings.Replace(string(stdout.Bytes()), "\n", "", -1)
-			iscsiadmError = fmt.Errorf("iscsiadm error: %s (%s)", formattedOutput, err.Error())
-
-		}
-	}
-
-	iscsiadmDebug(string(stdout.Bytes()), iscsiadmError)
-	return string(stdout.Bytes()), iscsiadmError
+	return string(stdout), err
 }
 
 func iscsiadmDebug(output string, cmdError error) {
@@ -83,28 +49,34 @@ func ListInterfaces() ([]string, error) {
 // ShowInterface retrieves the details for the specified iscsi interface
 // caller should inspect r.Err and use r.StdOut for interface details
 func ShowInterface(iface string) (string, error) {
-	debug.Printf("Begin ShowInterface (%s)...\n", iface)
+	debug.Println("Begin ShowInterface...")
 	out, err := iscsiCmd("-m", "iface", "-o", "show", "-I", iface)
 	return out, err
 }
 
 // CreateDBEntry sets up a node entry for the specified tgt in the nodes iscsi nodes db
 func CreateDBEntry(tgtIQN, portal, iFace string, discoverySecrets, sessionSecrets Secrets) error {
-	debug.Printf("Begin CreateDBEntry (%s)...\n", portal)
+	debug.Println("Begin CreateDBEntry...")
 	baseArgs := []string{"-m", "node", "-T", tgtIQN, "-p", portal}
-	_, err := iscsiCmd(append(baseArgs, []string{"-I", iFace, "-o", "new"}...)...)
+	_, err := iscsiCmd(append(baseArgs, "-I", iFace, "-o", "new")...)
 	if err != nil {
 		return err
 	}
 
 	if discoverySecrets.SecretsType == "chap" {
 		debug.Printf("Setting CHAP Discovery...")
-		createCHAPEntries(baseArgs, discoverySecrets, true)
+		err := createCHAPEntries(baseArgs, discoverySecrets, true)
+		if err != nil {
+			return err
+		}
 	}
 
 	if sessionSecrets.SecretsType == "chap" {
 		debug.Printf("Setting CHAP Session...")
-		createCHAPEntries(baseArgs, sessionSecrets, false)
+		err := createCHAPEntries(baseArgs, sessionSecrets, false)
+		if err != nil {
+			return err
+		}
 	}
 
 	return err
@@ -183,28 +155,23 @@ func GetSessions() (string, error) {
 func Login(tgtIQN, portal string) error {
 	debug.Println("Begin Login...")
 	baseArgs := []string{"-m", "node", "-T", tgtIQN, "-p", portal}
-	_, err := iscsiCmd(append(baseArgs, []string{"-l"}...)...)
-	if err != nil {
+	if _, err := iscsiCmd(append(baseArgs, []string{"-l"}...)...); err != nil {
 		//delete the node record from database
 		iscsiCmd(append(baseArgs, []string{"-o", "delete"}...)...)
 		return fmt.Errorf("failed to sendtargets to portal %s, err: %v", portal, err)
 	}
-	return err
-}
-
-// Logout logs out the specified target, if the target is not logged in it's not considered an error
-func Logout(tgtIQN string, portals []string) error {
-	debug.Println("Begin Logout...")
-	baseArgs := []string{"-m", "node", "-T", tgtIQN}
-	for _, p := range portals {
-		debug.Printf("attempting logout (%s) for portal: %s", tgtIQN, p)
-		args := append(baseArgs, []string{"-p", p, "-u"}...)
-		iscsiCmd(args...)
-	}
 	return nil
 }
 
-// DeleteDBEntry deletes the iscsi db entry fo rthe specified target
+// Logout logs out the specified target
+func Logout(tgtIQN, portal string) error {
+	debug.Println("Begin Logout...")
+	args := []string{"-m", "node", "-T", tgtIQN, "-p", portal, "-u"}
+	iscsiCmd(args...)
+	return nil
+}
+
+// DeleteDBEntry deletes the iscsi db entry for the specified target
 func DeleteDBEntry(tgtIQN string) error {
 	debug.Println("Begin DeleteDBEntry...")
 	args := []string{"-m", "node", "-T", tgtIQN, "-o", "delete"}
