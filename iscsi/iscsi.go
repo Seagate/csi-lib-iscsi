@@ -16,7 +16,11 @@ import (
 	"time"
 )
 
-const defaultPort = "3260"
+const (
+	defaultPort          = "3260"
+	maxMultipathAttempts = 10
+	multipathDelay       = 30
+)
 
 var (
 	debug           *log.Logger
@@ -211,37 +215,42 @@ func getMultipathDisk(path string) (string, error) {
 	// check to see if any have an entry under /sys/block/dm-*/slaves matching
 	// the device the symlink was pointing at
 	attempts := 1
-	dmPaths, err := filepath.Glob("/sys/block/dm-*")
-	for attempts < 4 {
-		debug.Printf("[%d] dmPaths=%v", attempts, dmPaths)
+	var dmPaths []string
+
+	for attempts < (maxMultipathAttempts + 1) {
+		var err error
+		dmPaths, err = filepath.Glob("/sys/block/dm-*")
+		debug.Printf("[%d] refresh dmPaths [%d] %v", attempts, len(dmPaths), dmPaths)
 		if err != nil {
 			debug.Printf("Glob error: %s", err)
 			return "", err
 		}
-		if len(dmPaths) > 0 {
-			break
-		}
-		time.Sleep(1 * time.Second)
-		attempts++
-		dmPaths, err = filepath.Glob("/sys/block/dm-*")
-	}
-	for _, dmPath := range dmPaths {
-		sdevices, err := filepath.Glob(filepath.Join(dmPath, "slaves", "*"))
-		debug.Printf("dmPath=%v/slaves/*, sdevices=%v", dmPath, sdevices)
-		if err != nil {
-			debug.Printf("Glob error: %s", err)
-		}
-		for _, spath := range sdevices {
-			s := filepath.Base(spath)
-			debug.Printf("Basepath: %s", s)
-			if sdevice == s {
-				// We've found a matching entry, return the path for the
-				// dm-* device it was found under
-				p := filepath.Join("/dev", filepath.Base(dmPath))
-				debug.Printf("Found matching multipath device (%s) under dm-* device path (%s), (%v)", sdevice, dmPath, p)
-				return p, nil
+
+		for _, dmPath := range dmPaths {
+			sdevices, err := filepath.Glob(filepath.Join(dmPath, "slaves", "*"))
+			// debug.Printf(".. dmPath=%v, sdevices=[%d]%v", dmPath, len(sdevices), sdevices)
+			if err != nil {
+				debug.Printf("Glob error: %s", err)
+			}
+			for _, spath := range sdevices {
+				s := filepath.Base(spath)
+				// debug.Printf(".. Basepath: %s", s)
+				if sdevice == s {
+					// We've found a matching entry, return the path for the
+					// dm-* device it was found under
+					p := filepath.Join("/dev", filepath.Base(dmPath))
+					debug.Printf("Found matching multipath device (%s) under dm-* device path (%s) p (%v)", sdevice, dmPath, p)
+					return p, nil
+				}
 			}
 		}
+
+		// Force a reload of all existing multipath maps
+		output, err := execCommand("multipath", "-r").CombinedOutput()
+		debug.Printf("## multipath -r: output=%v, err=%v", output, err)
+
+		time.Sleep(multipathDelay * time.Second)
+		attempts++
 	}
 	debug.Printf("Couldn't find dm-* path for path: %s, found non dm-* path: %s", path, devicePath)
 	return "", fmt.Errorf("couldn't find dm-* path for path: %s, found non dm-* path: %s", path, devicePath)
@@ -350,7 +359,7 @@ func Connect(c *Connector) (string, error) {
 	}
 
 	if lastErr != nil {
-		debug.Printf("Last error occured during iscsi init: \n%v", lastErr)
+		debug.Printf("Last error occurred during iscsi init: \n%v", lastErr)
 	}
 
 	for i, path := range devicePaths {
@@ -465,11 +474,14 @@ func PersistConnector(c *Connector, filePath string) error {
 	//file := path.Join("mnt", c.VolumeName+".json")
 	f, err := os.Create(filePath)
 	if err != nil {
+		debug.Printf("ERROR: creating iscsi persistence file %s: %s\n", filePath, err)
 		return fmt.Errorf("error creating iscsi persistence file %s: %s", filePath, err)
 	}
 	defer f.Close()
 	encoder := json.NewEncoder(f)
+	debug.Printf("ConnectorFromFile (write): file=%v, c=%+v\n", filePath, c)
 	if err = encoder.Encode(c); err != nil {
+		debug.Printf("ERROR: error encoding connector: %v\n", err)
 		return fmt.Errorf("error encoding connector: %v", err)
 	}
 	return nil
@@ -490,7 +502,7 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 		return &Connector{}, err
 	}
 
-	debug.Printf("data: %+v\n", data)
+	debug.Printf("ConnectorFromFile (read): file=%s, %+v\n", filePath, data)
 
 	return &data, nil
 
