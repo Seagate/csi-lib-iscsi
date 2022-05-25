@@ -220,7 +220,7 @@ func getMultipathDisk(path string) (string, error) {
 	for attempts < (maxMultipathAttempts + 1) {
 		var err error
 		dmPaths, err = filepath.Glob("/sys/block/dm-*")
-		debug.Printf("[%d] (%d) dmPaths=%v", attempts, len(dmPaths), dmPaths)
+		debug.Printf("[%d] refresh dmPaths [%d] %v", attempts, len(dmPaths), dmPaths)
 		if err != nil {
 			debug.Printf("Glob error: %s", err)
 			return "", err
@@ -228,7 +228,7 @@ func getMultipathDisk(path string) (string, error) {
 
 		for _, dmPath := range dmPaths {
 			sdevices, err := filepath.Glob(filepath.Join(dmPath, "slaves", "*"))
-			debug.Printf(".. dmPath=%v, sdevices=[%d]%v", dmPath, len(sdevices), sdevices)
+			// debug.Printf(".. dmPath=%v, sdevices=[%d]%v", dmPath, len(sdevices), sdevices)
 			if err != nil {
 				debug.Printf("Glob error: %s", err)
 			}
@@ -246,9 +246,8 @@ func getMultipathDisk(path string) (string, error) {
 		}
 
 		// Force a reload of all existing multipath maps
-		if output, err := execCommand("multipath", "-r").CombinedOutput(); err != nil {
-			debug.Printf("## multipath -r: output=%v, err=%v", output, err)
-		}
+		output, err := execCommand("multipath", "-r").CombinedOutput()
+		debug.Printf("## multipath -r: output=%v, err=%v", output, err)
 
 		time.Sleep(multipathDelay * time.Second)
 		attempts++
