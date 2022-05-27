@@ -19,7 +19,7 @@ import (
 const (
 	defaultPort          = "3260"
 	maxMultipathAttempts = 10
-	multipathDelay       = 30
+	multipathDelay       = 10
 )
 
 var (
@@ -162,7 +162,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 		err = nil
 		if deviceTransport == "tcp" {
 			_, err = osStat(*devicePath)
-			debug.Printf("os stat device: exist %v device %v", !os.IsNotExist(err), *devicePath)
+			debug.Printf("[%d] os stat device: exist %v device %v", i, !os.IsNotExist(err), *devicePath)
 			if err != nil && !os.IsNotExist(err) {
 				debug.Printf("Error attempting to stat device: %s", err.Error())
 				return false, err
@@ -171,7 +171,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 			}
 
 		} else {
-			debug.Printf("filepathGlob: %s", *devicePath)
+			debug.Printf("[%d] filepathGlob: %s", i, *devicePath)
 			fpath, _ := filepathGlob(*devicePath)
 			if fpath == nil {
 				err = os.ErrNotExist
@@ -191,6 +191,7 @@ func waitForPathToExistImpl(devicePath *string, maxRetries, intervalSeconds int,
 		}
 		time.Sleep(time.Second * time.Duration(intervalSeconds))
 	}
+	debug.Printf("device does NOT exist [%d*%ds] (%v)", maxRetries, intervalSeconds, *devicePath)
 	return false, err
 }
 

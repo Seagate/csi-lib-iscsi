@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -112,8 +111,8 @@ func RemoveAndClear(device string) error {
 	debug.Printf("dmsetup remove -f %s\n", device)
 	if output, err := execCommand("dmsetup", "remove", "-f", device).CombinedOutput(); err != nil {
 		exitErr, ok := err.(*exec.ExitError)
-		if ok && exitErr.ProcessState.Sys().(syscall.WaitStatus).ExitStatus() != 0 {
-			debug.Printf("ERROR: dmsetup remove -f ExitStatus: %d, err=%v\n", exitErr.ProcessState.Sys().(syscall.WaitStatus).ExitStatus(), err)
+		if ok && exitErr.ExitCode() != 0 {
+			debug.Printf("ERROR: dmsetup remove -f ExitCode: %d, err=%v\n", exitErr.ExitCode(), err)
 		}
 
 		return fmt.Errorf("device-mapper could not remove device: %s (%v)", output, err)
