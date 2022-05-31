@@ -108,7 +108,13 @@ func RemoveAndClear(device string) error {
 	debug.Printf("Remove and clear multipath device (%s)\n", device)
 
 	// Remove device-mapper logical device
+	debug.Printf("dmsetup remove -f %s\n", device)
 	if output, err := execCommand("dmsetup", "remove", "-f", device).CombinedOutput(); err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if ok && exitErr.ExitCode() != 0 {
+			debug.Printf("ERROR: dmsetup remove -f ExitCode: %d, err=%v\n", exitErr.ExitCode(), err)
+		}
+
 		return fmt.Errorf("device-mapper could not remove device: %s (%v)", output, err)
 	}
 
@@ -116,6 +122,7 @@ func RemoveAndClear(device string) error {
 	if _, e := os.Stat(device); os.IsNotExist(e) {
 		debug.Printf("device-mapper logical device %q was removed\n", device)
 	} else {
+		debug.Printf("dmsetup clear %s\n", device)
 		if output, err := execCommand("dmsetup", "clear", device).CombinedOutput(); err != nil {
 			return fmt.Errorf("device-mapper could not clear device: %s (%v)", output, err)
 		}
