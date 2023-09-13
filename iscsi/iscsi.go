@@ -45,7 +45,7 @@ type TargetInfo struct {
 	Port   string `json:"port"`
 }
 
-//Connector provides a struct to hold all of the needed parameters to make our iscsi connection
+// Connector provides a struct to hold all of the needed parameters to make our iscsi connection
 type Connector struct {
 	VolumeName       string       `json:"volume_name"`
 	Targets          []TargetInfo `json:"targets"`
@@ -385,7 +385,7 @@ func Connect(c *Connector) (string, error) {
 	return "", err
 }
 
-//Disconnect performs a disconnect operation on a volume
+// Disconnect performs a disconnect operation on a volume
 func Disconnect(tgtIqn string, portals []string) error {
 	err := Logout(tgtIqn, portals)
 	if err != nil {
@@ -480,7 +480,7 @@ func PersistConnector(c *Connector, filePath string) error {
 	}
 	defer f.Close()
 	encoder := json.NewEncoder(f)
-	debug.Printf("ConnectorFromFile (write): file=%v, c=%+v\n", filePath, c)
+	debug.Printf("Connector Persistence File (write): file=%s\n", filePath)
 	if err = encoder.Encode(c); err != nil {
 		debug.Printf("ERROR: error encoding connector: %v\n", err)
 		return fmt.Errorf("error encoding connector: %v", err)
@@ -503,7 +503,7 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 		return &Connector{}, err
 	}
 
-	debug.Printf("ConnectorFromFile (read): file=%s, %+v\n", filePath, data)
+	debug.Printf("ConnectorFromFile (read): file=%s\n", filePath)
 
 	return &data, nil
 
