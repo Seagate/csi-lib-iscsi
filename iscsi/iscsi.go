@@ -480,7 +480,7 @@ func PersistConnector(c *Connector, filePath string) error {
 	}
 	defer f.Close()
 	encoder := json.NewEncoder(f)
-	debug.Printf("Connector Persistence File (write): file=%v\n", filePath)
+	debug.Printf("Connector Persistence File (write): file=%s\n", filePath)
 	if err = encoder.Encode(c); err != nil {
 		debug.Printf("ERROR: error encoding connector: %v\n", err)
 		return fmt.Errorf("error encoding connector: %v", err)
