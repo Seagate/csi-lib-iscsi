@@ -55,7 +55,7 @@ func main() {
 
 	// Now we can just issue a connection request using our Connector
 	// A succesful connection will include the device path to access our iscsi volume
-	path, err := iscsi.Connect(c)
+	path, err := iscsi.Connect(&c)
 	if err != nil {
 		log.Printf("Error returned from iscsi.Connect: %s", err.Error())
 		os.Exit(1)
