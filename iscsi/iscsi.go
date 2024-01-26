@@ -1,3 +1,4 @@
+// Copyright (c) 2024 Seagate Technology LLC and/or its Affiliates
 package iscsi
 
 import (
@@ -45,6 +46,13 @@ type TargetInfo struct {
 	Port   string `json:"port"`
 }
 
+type HCTL struct {
+	HBA     int
+	Channel int
+	Target  int
+	LUN     int
+}
+
 // Connector provides a struct to hold all of the needed parameters to make our iscsi connection
 type Connector struct {
 	VolumeName       string       `json:"volume_name"`
@@ -55,16 +63,13 @@ type Connector struct {
 	SessionSecrets   Secrets      `json:"session_secrets"`
 	Interface        string       `json:"interface"`
 	Multipath        bool         `json:"multipath"`
-
-	// DevicePath is dm-x for a multipath device, and sdx for a normal device.
-	DevicePath string `json:"device_path"`
-
-	RetryCount      int32    `json:"retry_count"`
-	CheckInterval   int32    `json:"check_interval"`
-	DoDiscovery     bool     `json:"do_discovery"`
-	DoCHAPDiscovery bool     `json:"do_chap_discovery"`
-	TargetIqn       string   `json:"target_iqn"`
-	TargetPortals   []string `json:"target_portals"`
+	DevicePath       string       `json:"device_path"` // DevicePath is dm-x for a multipath device, and sdx for a normal device.
+	RetryCount       int32        `json:"retry_count"`
+	CheckInterval    int32        `json:"check_interval"`
+	DoDiscovery      bool         `json:"do_discovery"`
+	DoCHAPDiscovery  bool         `json:"do_chap_discovery"`
+	TargetIqn        string       `json:"target_iqn"`
+	TargetPortals    []string     `json:"target_portals"`
 }
 
 func init() {
@@ -287,10 +292,8 @@ func Connect(c *Connector) (string, error) {
 
 	for _, target := range c.Targets {
 		debug.Printf("process targetIqn: %s, portal: %s\n", target.Iqn, target.Portal)
-		baseArgs := []string{"-m", "node", "-T", target.Iqn, "-p", target.Portal}
-		// Rescan sessions to discover newly mapped LUNs. Do not specify the interface when rescanning
-		// to avoid establishing additional sessions to the same target.
-		if _, err := iscsiCmd(append(baseArgs, []string{"-R"}...)...); err != nil {
+		// Rescan sessions to discover newly mapped LUNs.
+		if err := ISCSIRescan(target.Iqn, int(c.Lun)); err != nil {
 			debug.Printf("failed to rescan session, err: %v", err)
 		}
 
@@ -507,4 +510,87 @@ func GetConnectorFromFile(filePath string) (*Connector, error) {
 
 	return &data, nil
 
+}
+
+func RescanISCSIDevices(hctls []HCTL) error {
+	debug.Printf("Begin RescanISCSIDevices (%v)...", hctls)
+	for _, hctl := range hctls {
+		scanFilePath := fmt.Sprintf("/sys/class/scsi_host/host%d/scan", hctl.HBA)
+		err := os.WriteFile(scanFilePath, []byte(fmt.Sprintf("%d %d %d\n", hctl.Channel, hctl.Target, hctl.LUN)), 0644)
+		if err != nil {
+			debug.Printf("error writing scan file %s: %v", scanFilePath, err)
+			return err
+		}
+	}
+	return nil
+}
+
+// ISCSIRescan takes a target iqn and lun and writes to the scan file in the scsi subsystem
+// We do this manually instead of relying on iscsiadm -R. This prevents a race condition in which
+// devices that are in the process of being removed can be re-discovered and left behind.
+func ISCSIRescan(tgtIQN string, lun int) error {
+	debug.Printf("Begin ISCSIRescan (%s, %d)...", tgtIQN, lun)
+	var hctlsToScan []HCTL
+	// Get all scsi targets
+	sessionTargetFilenames, err := filepath.Glob("/sys/class/scsi_host/host*/device/session*/iscsi_session/session*/targetname")
+	if err != nil {
+		debug.Printf("Error searching for scsi session targets in /sys/class/scsi_host")
+		return err
+	}
+	SCSIHostPath := ""
+	// loop over all found sessions. if the targetname matches the target we want to scan, create an HCTL for it and add it to list of devices to scan
+	for _, sessionTargetFile := range sessionTargetFilenames {
+		targetName, err := os.ReadFile(sessionTargetFile)
+		if err != nil {
+			debug.Printf("Error reading session file %s, skipping to next session", sessionTargetFile)
+			continue
+		}
+		if strings.TrimSpace(string(targetName)) == strings.TrimSpace(tgtIQN) {
+			SCSIHostPath = strings.Split(sessionTargetFile, "/device/")[0]
+			hba, err := strconv.Atoi(strings.TrimPrefix(SCSIHostPath, "/sys/class/scsi_host/host"))
+			if err != nil {
+				debug.Printf("Error retrieving HBA number from path %s", SCSIHostPath)
+				return err
+			}
+			sessionPath := strings.Split(sessionTargetFile, "/iscsi_session")[0]
+			targetFilesInSession, err := filepath.Glob(filepath.Join(sessionPath, "target*"))
+			if err != nil {
+				debug.Printf("Error getting target info from session directory %s", sessionPath)
+				return err
+			}
+			for _, target := range targetFilesInSession {
+				// this will be a filename formatted like "target3:0:0", we want to extract the last 2 numbers which represent the channel and target
+				hostChannelTarget := strings.Split(strings.TrimPrefix(filepath.Base(target), "target"), ":")
+				if len(hostChannelTarget) < 3 {
+					return fmt.Errorf("could not parse channel and target from filepath: %s", target)
+				}
+				channel, err := strconv.Atoi(hostChannelTarget[1])
+				if err != nil {
+					debug.Printf("Error parsing channel number from path %s", target)
+					return err
+				}
+				targetnum, err := strconv.Atoi(hostChannelTarget[2])
+				if err != nil {
+					debug.Printf("Error parsing target number from path %s", target)
+					return err
+				}
+				hctlsToScan = append(hctlsToScan,
+					HCTL{
+						HBA:     hba,
+						Channel: channel,
+						Target:  targetnum,
+						LUN:     lun})
+
+			}
+		}
+	}
+	if SCSIHostPath == "" {
+		return fmt.Errorf("could not find scsi target in scsi_host directory tree")
+	}
+	err = RescanISCSIDevices(hctlsToScan)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
