@@ -561,6 +561,9 @@ func ISCSIRescan(tgtIQN string, lun int) error {
 			for _, target := range targetFilesInSession {
 				// this will be a filename formatted like "target3:0:0", we want to extract the last 2 numbers which represent the channel and target
 				hostChannelTarget := strings.Split(strings.TrimPrefix(filepath.Base(target), "target"), ":")
+				if len(hostChannelTarget) < 3 {
+					return fmt.Errorf("could not parse channel and target from filepath: %s", target)
+				}
 				channel, err := strconv.Atoi(hostChannelTarget[1])
 				if err != nil {
 					debug.Printf("Error parsing channel number from path %s", target)
