@@ -312,15 +312,15 @@ func Connect(c *Connector) (string, error) {
 		exists, _ := sessionExists(p, target.Iqn)
 		if exists {
 			debug.Printf("Session already exists, checking if device path %q exists", devicePath)
-			exists, err := waitForPathToExist(&devicePath, int(c.RetryCount), int(c.CheckInterval), iscsiTransport)
-			debug.Printf("waitForPathToExist: exists=%v err=%v", exists, err)
-			if exists {
+			devPathExists, err := waitForPathToExist(&devicePath, int(c.RetryCount), int(c.CheckInterval), iscsiTransport)
+			debug.Printf("waitForPathToExist: exists=%v err=%v", devPathExists, err)
+			if devPathExists {
 				debug.Printf("Appending device path: %s", devicePath)
 				devicePaths = append(devicePaths, devicePath)
-				continue
 			} else if err != nil {
-				return "", err
+				lastErr = err
 			}
+			continue
 		}
 
 		if c.DoDiscovery {
